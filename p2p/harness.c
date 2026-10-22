@@ -1,12 +1,16 @@
-// THROWAWAY SPIKE HARNESS — not production.
+// X-IOT P2P bridge harness (plan Task 1-2).
 // Loads the vendor P2P lib (libobject_jni.so, arm64 Android) with a fake
-// JNIEnv/JavaVM so we can drive StartPPPP against a real camera UID and see
-// whether a P2P session + first video frame happens, without a full Android.
+// JNIEnv/JavaVM, drives StartPPPP against a real camera UID over the vendor
+// relay, and on ON_LINE(2) starts the livestream and writes the raw video
+// frames the camera sends (this device: MJPEG, a run of self-contained JPEG
+// frames) to STDOUT (fd 1). Status/diagnostics go to STDERR (fd 2) only, as
+// parseable lines `STATUS <uid> <type> <param>`. Runs until killed; exits
+// non-zero if the video stalls so a supervisor can restart (reconnect).
 //
-// Build with NDK clang for aarch64-linux-android. Run under qemu-aarch64 with
-// a bionic runtime (-L sysroot) and LD_LIBRARY_PATH = APK lib dir + sysroot.
+// Build with NDK clang for aarch64-linux-android (see build-harness.sh); run
+// under qemu-aarch64 with the bionic runtime image (see build-runtime.sh).
 //
-// Usage: harness <UID> <user> <pwd>
+// Usage: harness <UID> <user> <pwd>   (env: XIOT_STREAM=1|2, default 1)
 #define _GNU_SOURCE
 #include <jni.h>
 #include <dlfcn.h>
@@ -20,6 +24,7 @@
 #include <signal.h>
 #include <ucontext.h>
 #include <link.h>
+#include <errno.h>
 
 static void *g_env_ptr;   // = &g_env, set in main before any callback
 static long g_heals=0;
@@ -62,7 +67,19 @@ typedef struct { int tag; } Obj;
 static Obj g_ctx = { T_OBJ };          // stand-in android.content.Context
 static long g_frames = 0, g_vbytes = 0;
 static volatile int g_online = 0;      // set when PPPP status == ON_LINE(2)
-static FILE *g_vout = NULL;            // first video stream dumped here
+
+// Write all n bytes of a video frame to stdout (fd 1); a short write on a pipe
+// is normal, so loop. If the consumer went away (EPIPE) or the write fails,
+// exit so the supervisor restarts the pipeline.
+static void writeall_stdout(const void*buf, size_t n){
+    const char*p = buf;
+    while(n){
+        ssize_t w = write(1, p, n);
+        if(w < 0){ if(errno==EINTR) continue; _exit(6); }
+        if(w == 0) _exit(6);
+        p += w; n -= (size_t)w;
+    }
+}
 
 static void log_env_idx(int);               // defined below; used by stubs.h
 #include "stubs.h"                            // g_jni_names[], g_estubs[256]
@@ -146,14 +163,14 @@ static void dispatch_callback(const char*who, Method*m, va_list ap){
     if(firstbuf && firstbuf->tag==T_BARR){
         if(is_video){
             g_frames++; g_vbytes += firstbuf->len;
-            if(!g_vout) g_vout=fopen("/work/out.h264","wb");
-            if(g_vout){ fwrite(firstbuf->b,1,firstbuf->len,g_vout); fflush(g_vout); }
-            if(g_frames<=5 || g_frames%30==0)
-                fprintf(stderr,"[VIDEO] %s frame#%ld len=%d total=%ld firstbytes=%02x %02x %02x %02x %02x\n",
+            // raw camera frame (JPEG for this device) straight to stdout; the
+            // bridge's ffmpeg demuxes the MJPEG run and transcodes to H.264.
+            if(firstbuf->len>0) writeall_stdout(firstbuf->b, (size_t)firstbuf->len);
+            if(g_frames<=3 || g_frames%60==0)
+                fprintf(stderr,"[VIDEO] %s frame#%ld len=%d total=%ld firstbytes=%02x %02x %02x %02x\n",
                     m->name,g_frames,firstbuf->len,g_vbytes,
                     firstbuf->len>0?firstbuf->b[0]:0,firstbuf->len>1?firstbuf->b[1]:0,
-                    firstbuf->len>2?firstbuf->b[2]:0,firstbuf->len>3?firstbuf->b[3]:0,
-                    firstbuf->len>4?firstbuf->b[4]:0);
+                    firstbuf->len>2?firstbuf->b[2]:0,firstbuf->len>3?firstbuf->b[3]:0);
         }
     }
     if(!is_video){
@@ -280,11 +297,12 @@ int main(int argc,char**argv){
 
     int stype = atoi(getenv("XIOT_STREAM")?:"1");
     int started=0, lastretry=0;
-    for(int s=0;s<180;s++){
+    long lastframes=0; int laststall=0;
+    for(int s=0;;s++){
         if(g_online && !started && pLive){
             jint r=pLive(&g_env,NULL,(jstring)&juid,stype);
             fprintf(stderr,"[ok] StartPPPPLivestream(%d) on ON_LINE -> %d\n",stype,r);
-            started=1;
+            started=1; lastframes=g_frames; laststall=s;
         }
         // retry the P2P connect every ~15s while not online (handles transient
         // DEVICE_NOT_ON_LINE(6)/CONNECT_TIMEOUT(7)/flapping)
@@ -296,10 +314,18 @@ int main(int argc,char**argv){
             lastretry=s;
         }
         sleep(1);
-        if(s%3==0) fprintf(stderr,"[..] t=%ds online=%d started=%d frames=%ld bytes=%ld heals=%ld\n",
+        if(s%10==0) fprintf(stderr,"[..] t=%ds online=%d started=%d frames=%ld bytes=%ld heals=%ld\n",
                            s,g_online,started,g_frames,g_vbytes,g_heals);
-        if(g_frames>0 && s>12) break;
+        // stall watchdog: once the livestream started, a 15s gap with no new
+        // frame means the session died — exit non-zero so the supervisor
+        // restarts us (reconnect). Before ON_LINE we keep waiting/retrying.
+        if(started){
+            if(g_frames>lastframes){ lastframes=g_frames; laststall=s; }
+            else if(s-laststall>=15){
+                fprintf(stderr,"[stall] no video for %ds after %ld frames — exiting for restart\n",
+                        s-laststall, g_frames);
+                return 4;
+            }
+        }
     }
-    fprintf(stderr,"[done] frames=%ld bytes=%ld\n",g_frames,g_vbytes);
-    return g_frames>0?0:3;
 }
