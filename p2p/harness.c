@@ -23,24 +23,29 @@
 
 static void *g_env_ptr;   // = &g_env, set in main before any callback
 static long g_heals=0;
-// Channel keeps its JNIEnv* at this+0x720, filled later by the command thread;
-// earlier callbacks read env==0 and fault on `ldr x8,[x0]`. Self-heal: on a
-// null read, repoint the zero reg at our fake env and retry. Bounded.
+static void modoff(unsigned long a, char*out, int n){ // "<lib> +0xoff"
+    Dl_info d; if(dladdr((void*)a,&d)&&d.dli_fname) snprintf(out,n,"%s +0x%lx",d.dli_fname,a-(unsigned long)d.dli_fbase);
+    else snprintf(out,n,"0x%lx",a);
+}
+// A vendor thread reads its JNIEnv from channel+0x720; before the command
+// thread fills it, that read yields 0 and the next `ldr Xt,[Xn]` faults at 0.
+// Heal ONLY that exact shape: a 64-bit LDR whose base register is 0 → repoint
+// the base at our fake env and retry. Anything else (null CALL, pc==0) is a
+// real bug on the video path — log the site precisely and exit, never loop.
 static void segv(int sig, siginfo_t*si, void*uc){
     ucontext_t*u=(ucontext_t*)uc;
-    unsigned long pc=u->uc_mcontext.pc;
-    if(si->si_addr==0 && g_env_ptr && g_heals<500000){
-        unsigned int insn=*(unsigned int*)pc;          // LDR Xt,[Xn{,#imm}] -> base = bits[9:5]
-        int rn=(insn>>5)&0x1f;
-        if(u->uc_mcontext.regs[rn]==0) u->uc_mcontext.regs[rn]=(unsigned long)g_env_ptr;
-        else for(int r=0;r<=28;r++){ if(u->uc_mcontext.regs[r]==0){ u->uc_mcontext.regs[r]=(unsigned long)g_env_ptr; break; } }
-        g_heals++; return;  // retry faulting instruction with env patched
+    unsigned long pc=u->uc_mcontext.pc, lr=u->uc_mcontext.regs[30];
+    if(si->si_addr==0 && g_env_ptr && pc>0x1000 && g_heals<100000){
+        unsigned int insn=*(unsigned int*)pc;
+        if((insn & 0xFFC00000u)==0xF9400000u){     // LDR Xt,[Xn{,#imm}] 64-bit
+            int rn=(insn>>5)&0x1f;
+            if(u->uc_mcontext.regs[rn]==0){ u->uc_mcontext.regs[rn]=(unsigned long)g_env_ptr; g_heals++; return; }
+        }
     }
-    unsigned long lr=u->uc_mcontext.regs[30];
-    Dl_info d; const char*mod="?"; unsigned long off=0;
-    if(dladdr((void*)pc,&d)&&d.dli_fname){ mod=d.dli_fname; off=pc-(unsigned long)d.dli_fbase; }
-    char b[256]; int n=snprintf(b,sizeof b,"\n[SEGV] sig=%d addr=%p pc=0x%lx (%s +0x%lx) lr=0x%lx heals=%ld\n",
-        sig,si->si_addr,pc,mod,off,lr,g_heals);
+    char pcs[160], lrs[160]; modoff(pc,pcs,sizeof pcs); modoff(lr,lrs,sizeof lrs);
+    char b[400]; int n=snprintf(b,sizeof b,
+        "\n[SEGV] sig=%d addr=%p pc=%s lr=%s heals=%ld x0=0x%lx x8=0x%lx\n",
+        sig,si->si_addr,pcs,lrs,g_heals,u->uc_mcontext.regs[0],u->uc_mcontext.regs[8]);
     write(2,b,n); _exit(42);
 }
 static void install_segv(void){ struct sigaction sa={0}; sa.sa_sigaction=segv; sa.sa_flags=SA_SIGINFO|SA_NODEFER; sigaction(SIGSEGV,&sa,0); }
@@ -56,6 +61,7 @@ typedef struct { int tag; } Obj;
 
 static Obj g_ctx = { T_OBJ };          // stand-in android.content.Context
 static long g_frames = 0, g_vbytes = 0;
+static volatile int g_online = 0;      // set when PPPP status == ON_LINE(2)
 static FILE *g_vout = NULL;            // first video stream dumped here
 
 static void log_env_idx(int);               // defined below; used by stubs.h
@@ -153,8 +159,10 @@ static void dispatch_callback(const char*who, Method*m, va_list ap){
     if(!is_video){
         // Stable, parseable status line for the supervisor (plan Task 4 parseStatus):
         //   STATUS <uid> <type> <param>
-        if((strstr(m->name,"MsgNotify")||strstr(m->name,"MessageNotify")) && ni>=2)
+        if((strstr(m->name,"MsgNotify")||strstr(m->name,"MessageNotify")) && ni>=2){
             fprintf(stderr,"STATUS %s %d %d\n", firststr?firststr->s:"?", ints[0], ints[1]);
+            if(ints[0]==0 && ints[1]==2) g_online=1;   // PPPP_STATUS_ON_LINE
+        }
         fprintf(stderr,"[CB] %s(", m->name);
         for(int i=0;i<ni;i++) fprintf(stderr,"%s%d", i?",":"", ints[i]);
         fprintf(stderr,")%s\n", firstbuf?" +bytes":"");
@@ -178,7 +186,7 @@ static jint f_DetachCurrentThread(JavaVM*vm){ return JNI_OK; }
 
 static struct JNIInvokeInterface g_vmiface;
 static const struct JNIInvokeInterface *g_vmifacep = &g_vmiface;
-static JavaVM g_vm = (JavaVM)&g_vmifacep;
+static JavaVM g_vm = (JavaVM)&g_vmiface;     // vm value points directly at the invoke table (natives get &g_vm and do *vm + off)
 
 static void build_tables(void){
     // fill every slot with a default stub, then override implemented ones
@@ -264,13 +272,34 @@ int main(int argc,char**argv){
     (void)accUser; (void)accPwd;
     if(pNet)   { jint r=pNet(&g_env,NULL); fprintf(stderr,"[ok] PPPPNetworkDetect -> %d\n",r); }
     if(pSetCb) { jint r=pSetCb(&g_env,NULL,(jobject)&g_ctx); fprintf(stderr,"[ok] SetCallbackContext -> %d\n",r); }
+    typedef jint (*i_s2)(JNIEnv*,jclass,jstring);
+    i_s2 pStop = (i_s2) dlsym(h,"Java_object_p2pipcam_nativecaller_NativeCaller_StopPPPP");
     if(pStart) { jint r=pStart(&g_env,NULL,(jstring)&juid,(jstring)&juser,(jstring)&jpwd,(jstring)&jsrvstr);
                  fprintf(stderr,"[ok] StartPPPP -> %d\n",r); }
     if(pChk)   { jint r=pChk(&g_env,NULL,(jstring)&juid); fprintf(stderr,"[ok] PPPPCheckDevOnline -> %d\n",r); }
-    sleep(12);
-    if(pLive)  { jint r=pLive(&g_env,NULL,(jstring)&juid,1); fprintf(stderr,"[ok] StartPPPPLivestream(1) -> %d\n",r); }
 
-    for(int s=0;s<75;s++){ sleep(1); if(s%5==0) fprintf(stderr,"[..] t=%ds frames=%ld bytes=%ld heals=%ld\n",s,g_frames,g_vbytes,g_heals); }
+    int stype = atoi(getenv("XIOT_STREAM")?:"1");
+    int started=0, lastretry=0;
+    for(int s=0;s<180;s++){
+        if(g_online && !started && pLive){
+            jint r=pLive(&g_env,NULL,(jstring)&juid,stype);
+            fprintf(stderr,"[ok] StartPPPPLivestream(%d) on ON_LINE -> %d\n",stype,r);
+            started=1;
+        }
+        // retry the P2P connect every ~15s while not online (handles transient
+        // DEVICE_NOT_ON_LINE(6)/CONNECT_TIMEOUT(7)/flapping)
+        if(!g_online && !started && pStart && s-lastretry>=15 && s>0){
+            fprintf(stderr,"[retry] re-StartPPPP at t=%ds\n",s);
+            if(pStop) pStop(&g_env,NULL,(jstring)&juid);
+            pStart(&g_env,NULL,(jstring)&juid,(jstring)&juser,(jstring)&jpwd,(jstring)&jsrvstr);
+            if(pChk) pChk(&g_env,NULL,(jstring)&juid);
+            lastretry=s;
+        }
+        sleep(1);
+        if(s%3==0) fprintf(stderr,"[..] t=%ds online=%d started=%d frames=%ld bytes=%ld heals=%ld\n",
+                           s,g_online,started,g_frames,g_vbytes,g_heals);
+        if(g_frames>0 && s>12) break;
+    }
     fprintf(stderr,"[done] frames=%ld bytes=%ld\n",g_frames,g_vbytes);
     return g_frames>0?0:3;
 }
