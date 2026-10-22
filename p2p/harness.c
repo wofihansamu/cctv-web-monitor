@@ -64,6 +64,8 @@ typedef struct { int tag; char *s; } Str;
 typedef struct { int tag; int len; unsigned char *b; } BArr;
 typedef struct { int tag; } Obj;
 
+#define STALL_COOLDOWN_S 30            // wait before restart when ON_LINE but no video (slot busy)
+
 static Obj g_ctx = { T_OBJ };          // stand-in android.content.Context
 static long g_frames = 0, g_vbytes = 0;
 static volatile int g_online = 0;      // set when PPPP status == ON_LINE(2)
@@ -319,11 +321,24 @@ int main(int argc,char**argv){
         // stall watchdog: once the livestream started, a 15s gap with no new
         // frame means the session died — exit non-zero so the supervisor
         // restarts us (reconnect). Before ON_LINE we keep waiting/retrying.
+        //
+        // Distinguish two cases, so a camera that only serves one video stream
+        // at a time (slot held by another viewer, e.g. the phone app) is not
+        // hammered with a tight reconnect loop:
+        //  - got frames then they stopped  -> real mid-stream drop; exit fast.
+        //  - ON_LINE but never a single frame -> slot busy / not delivering;
+        //    cool down before exiting so the container restart stays gentle.
         if(started){
             if(g_frames>lastframes){ lastframes=g_frames; laststall=s; }
             else if(s-laststall>=15){
-                fprintf(stderr,"[stall] no video for %ds after %ld frames — exiting for restart\n",
-                        s-laststall, g_frames);
+                if(g_frames==0){
+                    fprintf(stderr,"[stall] ON_LINE but no video in %ds (slot busy?) — "
+                            "cooling down %ds before restart\n", s-laststall, STALL_COOLDOWN_S);
+                    sleep(STALL_COOLDOWN_S);
+                } else {
+                    fprintf(stderr,"[stall] video stopped after %ld frames — exiting for fast reconnect\n",
+                            g_frames);
+                }
                 return 4;
             }
         }
