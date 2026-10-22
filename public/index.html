@@ -55,7 +55,31 @@
       <h3>Add camera</h3>
       <label>ID <input name="id" required pattern="[a-zA-Z0-9_-]+" placeholder="frontdoor" /></label>
       <label>Name <input name="name" placeholder="Front Door" /></label>
-      <label>RTSP URL <input name="rtsp" required placeholder="rtsp://user:pass@192.168.1.50:554/stream1" /></label>
+      <label>Connection type
+        <select name="ctype" id="ctype">
+          <option value="rtsp">IP camera — RTSP/ONVIF (same LAN)</option>
+          <option value="p2p">X-IOT P2P — UID + password (any network)</option>
+        </select>
+      </label>
+      <div id="rtspFields">
+        <label>RTSP URL <input name="rtsp" placeholder="rtsp://user:pass@192.168.1.50:554/stream1" /></label>
+      </div>
+      <div id="p2pFields" hidden>
+        <label>UID <input name="uid" placeholder="XIOTB-021580-TJBSS" /></label>
+        <label>Camera user <input name="p2puser" value="admin" placeholder="admin" /></label>
+        <label>Camera password <input name="p2ppass" type="password" placeholder="camera password" /></label>
+        <label>Stream
+          <select name="streamType">
+            <option value="1">1 — 640×480 (best)</option>
+            <option value="2">2 — 320×240</option>
+          </select>
+        </label>
+        <p class="muted" style="font-size:.85em;margin:.2em 0 0">
+          Needs an empty stream named like the ID in <code>go2rtc.yaml</code> and the
+          <code>p2p-bridge</code> running. The bridge reads the password from
+          <code>p2p/secrets.env</code> — see <code>p2p/README.md</code>.
+        </p>
+      </div>
       <label class="check"><input type="checkbox" name="record" checked /> Record live to server (continuous)</label>
       <label class="check"><input type="checkbox" name="autoformat" /> Auto-format camera SD every
         <input name="fhours" type="number" value="24" min="1" style="width:64px" /> h (only after footage is archived)</label>

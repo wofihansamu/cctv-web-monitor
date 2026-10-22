@@ -246,23 +246,48 @@ async function render() {
 }
 
 colsSel.addEventListener("change", () => (grid.className = `grid cols-${colsSel.value}`));
-addBtn.addEventListener("click", () => addDlg.showModal());
+// Add-camera form: toggle RTSP vs X-IOT P2P fields by connection type.
+const ctypeSel = document.getElementById("ctype");
+const rtspFields = document.getElementById("rtspFields");
+const p2pFields = document.getElementById("p2pFields");
+function syncAddType() {
+  const p2p = ctypeSel.value === "p2p";
+  p2pFields.hidden = !p2p;
+  rtspFields.hidden = p2p;
+}
+ctypeSel.addEventListener("change", syncAddType);
+
+addBtn.addEventListener("click", () => { syncAddType(); addDlg.showModal(); });
 addForm.addEventListener("submit", async (e) => {
   if (e.submitter?.value !== "ok") return;
   const f = new FormData(addForm);
-  const body = { id: f.get("id").trim(), name: f.get("name").trim(), rtsp: f.get("rtsp").trim(), record: f.get("record") === "on" };
-  if (f.get("ohost")) body.onvif = { host: f.get("ohost").trim(), port: Number(f.get("oport")) || 80, user: f.get("ouser").trim(), pass: f.get("opass") };
-  const sd = {};
-  if (f.get("sdlist")) sd.listUrl = f.get("sdlist").trim();
-  if (f.get("sddl")) sd.downloadUrl = f.get("sddl").trim();
-  if (f.get("sdformat")) sd.formatUrl = f.get("sdformat").trim();
-  if (f.get("sdinfo")) sd.infoUrl = f.get("sdinfo").trim();
-  if (Object.keys(sd).length) body.sd = sd;
-  if (f.get("autoformat") === "on") body.autoFormat = { enabled: true, everyHours: Number(f.get("fhours")) || 24 };
+  const body = { id: f.get("id").trim(), name: f.get("name").trim(), record: f.get("record") === "on" };
+  if (ctypeSel.value === "p2p") {
+    const uid = (f.get("uid") || "").trim();
+    if (!uid) { alert("UID is required for a P2P camera"); return; }
+    body.p2p = { uid, user: (f.get("p2puser") || "admin").trim() || "admin", streamType: Number(f.get("streamType")) || 1 };
+    const pwd = f.get("p2ppass");
+    if (pwd) body.p2p.pwd = pwd; // stored in cameras.json; the bridge reads p2p/secrets.env
+  } else {
+    const rtsp = (f.get("rtsp") || "").trim();
+    if (!rtsp) { alert("RTSP URL is required"); return; }
+    body.rtsp = rtsp;
+    if (f.get("ohost")) body.onvif = { host: f.get("ohost").trim(), port: Number(f.get("oport")) || 80, user: f.get("ouser").trim(), pass: f.get("opass") };
+    const sd = {};
+    if (f.get("sdlist")) sd.listUrl = f.get("sdlist").trim();
+    if (f.get("sddl")) sd.downloadUrl = f.get("sddl").trim();
+    if (f.get("sdformat")) sd.formatUrl = f.get("sdformat").trim();
+    if (f.get("sdinfo")) sd.infoUrl = f.get("sdinfo").trim();
+    if (Object.keys(sd).length) body.sd = sd;
+    if (f.get("autoformat") === "on") body.autoFormat = { enabled: true, everyHours: Number(f.get("fhours")) || 24 };
+  }
   const res = await fetch("/api/cameras", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) { const err = await res.json().catch(() => ({})); alert("Error: " + (err.error || res.status)); return; }
+  const result = await res.json().catch(() => ({}));
   addForm.reset();
+  syncAddType();
   render();
+  if (result.note) alert("Added. " + result.note);
 });
 
 cfg = await api("/api/config");
