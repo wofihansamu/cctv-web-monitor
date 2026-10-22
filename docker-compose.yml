@@ -1,0 +1,30 @@
+services:
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    container_name: cctv-go2rtc
+    network_mode: host          # host net = easiest RTSP discovery + WebRTC on LAN
+    restart: unless-stopped
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
+
+  web:
+    build: .
+    container_name: cctv-web
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - PORT=8900
+      - GO2RTC_URL=http://localhost:1984
+      - GO2RTC_PUBLIC_URL=http://localhost:1984
+      - REC_DIR=/app/recordings
+      - REC_SEGMENT_SEC=600     # clip length in seconds
+      - REC_MAX_DAYS=7          # auto-delete footage older than this
+      - REC_MAX_GB=0            # 0 = no size cap; set e.g. 50 to cap total
+      - ARCHIVE_EVERY_MIN=60    # pull camera SD -> server every hour
+      - FORMAT_EVERY_HOURS=24   # safe auto-format cadence
+      - AUTO_FORMAT=1           # 0 disables all auto-format
+    volumes:
+      - ./cameras.json:/app/cameras.json
+      - ./recordings:/app/recordings
+    depends_on:
+      - go2rtc

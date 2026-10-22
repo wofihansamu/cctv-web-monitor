@@ -1,0 +1,17 @@
+{
+  "name": "cctv-web-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted web CCTV monitor (RTSP/ONVIF -> WebRTC/HLS via go2rtc). An open-standard rebuild of the X-IOT CAM P2P app features.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^3.0.3",
+    "onvif": "^0.7.2"
+  }
+}

@@ -1,0 +1,19 @@
+# go2rtc media engine config.
+# Streams are registered dynamically by the Node server from cameras.json
+# via the go2rtc REST API, so this file only sets listeners.
+#
+# Docs: https://github.com/AlexxIT/go2rtc
+api:
+  listen: ":1984"          # REST API + built-in WebRTC/MSE player pages
+  origin: "*"              # allow the Node app (different port) to embed/proxy
+
+rtsp:
+  listen: ":8554"          # go2rtc can also re-serve RTSP if you need it
+
+webrtc:
+  listen: ":8555"          # WebRTC TCP/UDP. For remote access, see candidates below.
+  # candidates:
+  #   - "your.public.ip:8555"   # uncomment + set when exposing WebRTC over the internet
+
+# No static streams here on purpose. The server registers them at boot.
+streams: {}

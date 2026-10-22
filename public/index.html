@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CCTV Web Monitor</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="dot live"></span> CCTV Web Monitor</div>
+    <div class="actions">
+      <label class="layout">
+        Grid
+        <select id="cols">
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </label>
+      <button id="discoverBtn" class="btn ghost">🔍 Discover</button>
+      <button id="addBtn" class="btn">+ Add camera</button>
+    </div>
+  </header>
+
+  <main id="grid" class="grid cols-2"></main>
+
+  <!-- camera tile template -->
+  <template id="tile-tpl">
+    <section class="tile">
+      <div class="video"><iframe allow="autoplay; fullscreen" loading="lazy"></iframe></div>
+      <div class="bar">
+        <span class="status">
+          <span class="dot"></span><span class="name"></span>
+          <span class="recbadge" hidden>● REC</span>
+        </span>
+        <div class="controls">
+          <button class="btn ghost ptz" data-x="-0.5" title="Pan left">◀</button>
+          <button class="btn ghost ptz" data-y="0.5" title="Tilt up">▲</button>
+          <button class="btn ghost ptz" data-y="-0.5" title="Tilt down">▼</button>
+          <button class="btn ghost ptz" data-x="0.5" title="Pan right">▶</button>
+          <button class="btn ghost snap" title="Snapshot">⤓</button>
+          <button class="btn ghost rec" title="Recordings & archive">⏺</button>
+          <button class="btn ghost full" title="Fullscreen">⛶</button>
+          <button class="btn ghost del" title="Remove">✕</button>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- add-camera modal -->
+  <dialog id="addDlg">
+    <form method="dialog" id="addForm">
+      <h3>Add camera</h3>
+      <label>ID <input name="id" required pattern="[a-zA-Z0-9_-]+" placeholder="frontdoor" /></label>
+      <label>Name <input name="name" placeholder="Front Door" /></label>
+      <label>RTSP URL <input name="rtsp" required placeholder="rtsp://user:pass@192.168.1.50:554/stream1" /></label>
+      <label class="check"><input type="checkbox" name="record" checked /> Record live to server (continuous)</label>
+      <label class="check"><input type="checkbox" name="autoformat" /> Auto-format camera SD every
+        <input name="fhours" type="number" value="24" min="1" style="width:64px" /> h (only after footage is archived)</label>
+      <details>
+        <summary>ONVIF (PTZ) — optional</summary>
+        <label>Host <input name="ohost" placeholder="192.168.1.50" /></label>
+        <label>Port <input name="oport" type="number" placeholder="8000" /></label>
+        <label>User <input name="ouser" placeholder="admin" /></label>
+        <label>Pass <input name="opass" type="password" /></label>
+      </details>
+      <details>
+        <summary>On-camera SD (CGI) — optional, model-specific</summary>
+        <label>List URL <input name="sdlist" placeholder="http://user:pass@ip/sd/list.cgi" /></label>
+        <label>Download URL <input name="sddl" placeholder="http://user:pass@ip/sd/get?name={file}" /></label>
+        <label>Format URL <input name="sdformat" placeholder="http://user:pass@ip/sd/format.cgi" /></label>
+        <label>Info URL <input name="sdinfo" placeholder="http://user:pass@ip/sd/info.cgi" /></label>
+      </details>
+      <div class="row">
+        <button value="cancel" class="btn ghost">Cancel</button>
+        <button value="ok" class="btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- recordings modal -->
+  <dialog id="recDlg">
+    <div class="recHead">
+      <h3 id="recTitle">Recordings</h3>
+      <button id="recClose" class="btn ghost">✕</button>
+    </div>
+    <p id="recSched" class="muted sched"></p>
+    <video id="recPlayer" controls playsinline hidden></video>
+
+    <h4 class="listHdr">Server recordings <span id="recCount" class="muted"></span></h4>
+    <div id="recList" class="recList"></div>
+
+    <h4 class="listHdr">Archived from camera SD <span id="arcCount" class="muted"></span></h4>
+    <div id="arcList" class="recList"></div>
+
+    <div class="row between">
+      <div class="row">
+        <button id="archiveBtn" class="btn ghost">Archive now</button>
+        <button id="formatBtn" class="btn danger" hidden>Safe-format SD now</button>
+      </div>
+      <button id="wipeBtn" class="btn danger">Wipe server footage</button>
+    </div>
+  </dialog>
+
+  <!-- discover modal -->
+  <dialog id="discDlg">
+    <div class="recHead">
+      <h3>Discover cameras</h3>
+      <button id="discClose" class="btn ghost">✕</button>
+    </div>
+    <p class="muted">Scans your LAN (the server's network). Found cameras can be added in one click.</p>
+    <div class="disc-creds">
+      <input id="dUser" placeholder="camera user (optional)" />
+      <input id="dPass" type="password" placeholder="camera pass (optional)" />
+    </div>
+    <div class="row">
+      <button id="onvifScan" class="btn">ONVIF auto-scan</button>
+      <input id="subnet" placeholder="192.168.1" />
+      <button id="subnetScan" class="btn ghost">Scan subnet :554</button>
+    </div>
+    <p id="discStatus" class="muted sched"></p>
+    <div id="discList" class="recList"></div>
+  </dialog>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
