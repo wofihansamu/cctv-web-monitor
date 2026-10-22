@@ -7,4 +7,4 @@ recordings/
 # X-IOT P2P bridge
 p2p/secrets.env
 p2p/out/
-p2p/libs/*.so
+p2p/libs/
