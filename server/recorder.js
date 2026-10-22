@@ -15,8 +15,19 @@ const SEGMENT_SEC = Number(process.env.REC_SEGMENT_SEC || 600); // 10-min clips
 const MAX_DAYS = Number(process.env.REC_MAX_DAYS || 7);
 const MAX_GB = Number(process.env.REC_MAX_GB || 0); // 0 = no size cap
 
+const GO2RTC_RTSP = process.env.GO2RTC_RTSP || "rtsp://127.0.0.1:8554";
+
 const procs = new Map(); // id -> { child, stopping }
 let ffmpegOk = null;
+
+// The RTSP source to record for a camera. RTSP/ONVIF cameras record their own
+// URL; P2P cameras have no pullable URL, so we record go2rtc's re-served RTSP of
+// the stream the bridge pushes (same id). Returns null when nothing is recordable.
+export function recordSource(cam) {
+  if (cam?.rtsp) return cam.rtsp;
+  if (cam?.p2p?.uid) return `${GO2RTC_RTSP}/${cam.id}`;
+  return null;
+}
 
 export const RECORDINGS_DIR = REC_DIR;
 
@@ -51,7 +62,7 @@ async function startOne(cam) {
   const args = [
     "-nostdin", "-loglevel", "warning",
     "-rtsp_transport", "tcp",
-    "-i", cam.rtsp,
+    "-i", recordSource(cam),
     "-an", "-c", "copy", // copy video; drop audio to avoid container issues. Use -c copy with -map 0 to keep audio.
     "-f", "segment",
     "-segment_time", String(SEGMENT_SEC),
@@ -151,7 +162,7 @@ export async function startRecorder(loadCameras) {
     return;
   }
   await mkdir(REC_DIR, { recursive: true });
-  const cams = (await loadCameras()).filter((c) => c.record && c.rtsp);
+  const cams = (await loadCameras()).filter((c) => c.record && recordSource(c));
   for (const c of cams) await startOne(c).catch((e) => console.warn("[rec]", c.id, e.message));
   enforceRetention().catch(() => {});
   setInterval(() => enforceRetention().catch(() => {}), 3600_000);
@@ -161,9 +172,9 @@ export async function startRecorder(loadCameras) {
 // Re-sync when cameras change at runtime.
 export async function syncRecorder(cameras) {
   if (!(await hasFfmpeg())) return;
-  const want = new Set(cameras.filter((c) => c.record && c.rtsp).map((c) => c.id));
+  const want = new Set(cameras.filter((c) => c.record && recordSource(c)).map((c) => c.id));
   for (const id of procs.keys()) if (!want.has(id)) stopOne(id);
-  for (const c of cameras) if (c.record && c.rtsp && !procs.has(c.id)) await startOne(c).catch(() => {});
+  for (const c of cameras) if (c.record && recordSource(c) && !procs.has(c.id)) await startOne(c).catch(() => {});
 }
 
 export const recordingEnabled = hasFfmpeg;
