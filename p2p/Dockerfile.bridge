@@ -1,0 +1,23 @@
+# X-IOT P2P bridge image.
+#
+# Base is the flattened bionic runtime (xiot-bionic:arm64, built by
+# build-runtime.sh) that can load the vendor arm64 .so under qemu-user. On top
+# we add a static x86_64 ffmpeg (runs natively — the container shares the host
+# kernel, so arm64 binaries go through binfmt-qemu while x86_64 ones run
+# directly). The harness is cross-compiled by build-harness.sh.
+#
+# Build (from the p2p/ directory, so libs/ and out/ are in context):
+#   docker build -f Dockerfile.bridge -t xiot-bridge:latest .
+# Requires: xiot-bionic:arm64 present, p2p/out/harness built, p2p/libs/*.so in place.
+FROM xiot-bionic:arm64
+
+# Static, dependency-free x86_64 ffmpeg (runs natively inside this image).
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+
+# Vendor runtime libs + the cross-compiled harness + entrypoint.
+COPY libs/ /work/
+COPY out/harness /work/out/harness
+COPY entrypoint.sh /work/entrypoint.sh
+
+WORKDIR /work
+ENTRYPOINT ["/system/bin/sh", "/work/entrypoint.sh"]

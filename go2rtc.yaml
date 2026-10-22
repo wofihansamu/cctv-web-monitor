@@ -15,5 +15,12 @@ webrtc:
   # candidates:
   #   - "your.public.ip:8555"   # uncomment + set when exposing WebRTC over the internet
 
-# No static streams here on purpose. The server registers them at boot.
-streams: {}
+# RTSP/ONVIF cameras are registered dynamically by the Node server at boot.
+#
+# P2P (X-IOT) cameras are the exception: the bridge container PUSHES H.264 into
+# go2rtc over RTSP, and go2rtc only accepts a push to a stream that already
+# exists with an empty source (the REST API cannot create an empty stream).
+# So each P2P camera needs a one-line empty entry here, named after its
+# cameras.json id. See p2p/README.md.
+streams:
+  xiotcam:   # X-IOT P2P camera XIOTB-021580-TJBSS (pushed by p2p-bridge)

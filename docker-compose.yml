@@ -28,3 +28,25 @@ services:
       - ./recordings:/app/recordings
     depends_on:
       - go2rtc
+
+  # X-IOT P2P camera bridge (optional). Runs the vendor arm64 P2P stack under
+  # qemu plus a static x86_64 ffmpeg, transcodes the camera's MJPEG to H.264 and
+  # pushes it into go2rtc. Enable with:  docker compose --profile p2p up -d
+  # Prereqs (see p2p/README.md): build xiot-bionic:arm64 + the harness, and copy
+  # p2p/secrets.example.env -> p2p/secrets.env. STREAM_NAME must match the camera
+  # id in cameras.json AND an empty stream declared in go2rtc.yaml.
+  p2p-bridge:
+    profiles: ["p2p"]
+    build:
+      context: ./p2p
+      dockerfile: Dockerfile.bridge
+    image: xiot-bridge:latest
+    container_name: cctv-xiot-bridge
+    network_mode: host
+    restart: always
+    env_file:
+      - ./p2p/secrets.env
+    environment:
+      - STREAM_NAME=xiotcam
+    depends_on:
+      - go2rtc
