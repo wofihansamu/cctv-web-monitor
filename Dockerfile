@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM docker.io/library/node:20-alpine
 WORKDIR /app
 RUN apk add --no-cache ffmpeg          # enables server-side recording
 COPY package.json ./

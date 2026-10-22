@@ -1,9 +1,9 @@
 services:
   go2rtc:
-    image: alexxit/go2rtc:latest
+    image: docker.io/alexxit/go2rtc:latest
     container_name: cctv-go2rtc
     network_mode: host          # host net = easiest RTSP discovery + WebRTC on LAN
-    restart: unless-stopped
+    restart: always             # with podman, also enable podman-restart.service to start on boot
     volumes:
       - ./go2rtc.yaml:/config/go2rtc.yaml:ro
 
@@ -11,7 +11,7 @@ services:
     build: .
     container_name: cctv-web
     network_mode: host
-    restart: unless-stopped
+    restart: always
     environment:
       - PORT=8900
       - GO2RTC_URL=http://localhost:1984
