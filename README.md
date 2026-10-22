@@ -178,10 +178,55 @@ node tools/probe.mjs rtsp 192.168.1.50 admin yourpassword
     "rtsp": "rtsp://admin:yourpass@192.168.1.50:554/<path probe found>",
     "record": true, "autoFormat": { "enabled": true, "everyHours": 24 } }
   ```
-- **If port 554 is closed / nothing matches** → that camera has no open stream;
-  the only ways to view it are the vendor P2P SDK (closed native lib — not
-  portable to the web), enabling RTSP/ONVIF in the camera's own settings if it
-  offers it, or using an ONVIF-capable camera. The monitor can't bridge raw P2P.
+- **If port 554 is closed / nothing matches**, or the server is **not on the
+  camera's LAN** at all → use the **server-side P2P bridge** below, which runs the
+  vendor P2P stack on the server and needs only the UID + camera password.
+
+### Server-side P2P bridge (off-LAN, no RTSP needed)
+
+When the camera exposes no RTSP and/or the server sits on a different network,
+the `p2p/` bridge reaches it the same way the app does: it runs the vendor arm64
+P2P library (`libobject_jni.so`) on the server under qemu, connects by UID +
+camera password over the vendor relay, and pushes the video into go2rtc. This
+camera streams **MJPEG 640×480** (it has no H.264 stream, whatever the app's
+"4K/2K/1080" labels say); the bridge transcodes to H.264 for the browser. No
+vendor **account** login is needed — the UID + camera password are enough.
+
+Prereqs: Docker + arm64 binfmt (registered by `p2p/build-runtime.sh`), Android
+NDK r26d, and the vendor `.so` files in `p2p/libs/` (from the arm64 APK split).
+
+```bash
+# 1) one-time: build the bionic runtime image and cross-compile the harness
+./p2p/build-runtime.sh
+ANDROID_NDK=/path/to/android-ndk-r26d ./p2p/build-harness.sh
+
+# 2) credentials (gitignored) — only the camera's own UID + password
+cp p2p/secrets.example.env p2p/secrets.env && "$EDITOR" p2p/secrets.env
+
+# 3) prove it connects and a frame flows (go/no-go gates)
+./p2p/test/gate-online.sh        # reaches ON_LINE(2)
+./p2p/test/capture-valid.sh      # valid MJPEG on stdout
+
+# 4) wire it up and run the bridge:
+#    - go2rtc.yaml: add an empty stream named after the camera id:
+#        streams:
+#          xiotcam:
+#    - cameras.json: add the camera with a p2p block (see cameras.example.json):
+#        { "id": "xiotcam", "name": "X-IOT Camera", "record": true,
+#          "p2p": { "uid": "XIOTB-021580-TJBSS", "user": "admin", "streamType": 1 } }
+#    - docker-compose.yml: STREAM_NAME must equal that id and the go2rtc stream
+docker compose --profile p2p up -d --build
+```
+
+The status dot turns **online** once go2rtc is receiving the push; snapshots and
+recording then work like any other camera. If the camera drops, the harness
+stall-watchdog exits and the container's `restart: always` reconnects.
+
+**Limitations:** depends on the vendor cloud/relay staying up (not an offline
+solution); runs the arm64 lib under qemu (CPU-heavy for continuous streaming);
+this camera is MJPEG VGA only (~1.5–2 fps at 640×480). Design and details:
+`docs/superpowers/specs/2026-10-22-xiot-p2p-server-bridge-design.md` and
+`p2p/README.md`.
 
 ## Remote ("online") access
 
