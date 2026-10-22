@@ -19,5 +19,11 @@
       "formatUrl": "http://admin:password@192.168.1.51/cgi-bin/sd_format.cgi",
       "infoUrl": "http://admin:password@192.168.1.51/cgi-bin/sd_info.cgi"
     }
+  },
+  {
+    "id": "xiotcam",
+    "name": "X-IOT Camera (P2P)",
+    "record": true,
+    "p2p": { "uid": "XIOTB-021580-TJBSS", "user": "admin", "streamType": 1 }
   }
 ]

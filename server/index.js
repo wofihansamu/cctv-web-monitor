@@ -10,6 +10,8 @@ import * as onvif from "./onvif.js";
 import * as rec from "./recorder.js";
 import * as sched from "./scheduler.js";
 import * as discovery from "./discovery.js";
+import * as p2p from "./p2p.js";
+import { producerOnline } from "./status.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -38,6 +40,12 @@ const byId = (list, id) => list.find((c) => c.id === id);
 async function syncStreams() {
   const cams = await loadCameras();
   for (const c of cams) {
+    // P2P cameras are pushed into go2rtc by the bridge container; the empty
+    // stream is declared in go2rtc.yaml, so we only verify it exists here.
+    if (p2p.isP2P(c)) {
+      await p2p.ensureP2PStream(c);
+      continue;
+    }
     if (c.rtsp) await g2.registerStream(c.id, c.rtsp).catch((e) => console.warn("register", c.id, e.message));
   }
   console.log(`Registered ${cams.length} camera stream(s) with go2rtc`);
@@ -72,6 +80,7 @@ app.get("/api/cameras", async (_req, res) => {
       id: c.id,
       name: c.name,
       record: !!c.record,
+      p2p: !!c.p2p,
       hasOnvif: !!c.onvif,
       hasSd: !!(c.sd && (c.sd.infoUrl || c.sd.formatUrl)),
       canArchive: !!((c.sd?.listUrl && c.sd?.downloadUrl) || c.record),
@@ -81,18 +90,29 @@ app.get("/api/cameras", async (_req, res) => {
 });
 
 app.post("/api/cameras", async (req, res) => {
-  const { id, name, rtsp, onvif: ov, sd, record, autoFormat } = req.body || {};
-  if (!id || !rtsp) return res.status(400).json({ error: "id and rtsp are required" });
+  const { id, name, rtsp, p2p: p2pCfg, onvif: ov, sd, record, autoFormat } = req.body || {};
+  const hasP2P = !!(p2pCfg && p2pCfg.uid);
+  if (!id || (!rtsp && !hasP2P)) return res.status(400).json({ error: "id and rtsp (or p2p.uid) are required" });
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) return res.status(400).json({ error: "id must be alphanumeric/_/-" });
   const cams = await loadCameras();
-  const entry = { id, name: name || id, rtsp, record: !!record, ...(ov ? { onvif: ov } : {}), ...(sd ? { sd } : {}), ...(autoFormat ? { autoFormat } : {}) };
+  const entry = {
+    id,
+    name: name || id,
+    record: !!record,
+    ...(rtsp ? { rtsp } : {}),
+    ...(hasP2P ? { p2p: p2pCfg } : {}),
+    ...(ov ? { onvif: ov } : {}),
+    ...(sd ? { sd } : {}),
+    ...(autoFormat ? { autoFormat } : {}),
+  };
   const i = cams.findIndex((c) => c.id === id);
   if (i >= 0) cams[i] = entry;
   else cams.push(entry);
   await saveCameras(cams);
-  await g2.registerStream(id, rtsp).catch(() => {});
+  if (rtsp) await g2.registerStream(id, rtsp).catch(() => {});
+  else if (hasP2P) await p2p.ensureP2PStream(entry).catch(() => {});
   await rec.syncRecorder(cams).catch(() => {});
-  res.json({ ok: true });
+  res.json({ ok: true, ...(hasP2P ? { note: "p2p camera: ensure go2rtc.yaml has an empty stream and the p2p-bridge runs for it" } : {}) });
 });
 
 app.delete("/api/cameras/:id", async (req, res) => {
@@ -107,8 +127,7 @@ app.delete("/api/cameras/:id", async (req, res) => {
 app.get("/api/status/:id", async (req, res) => {
   try {
     const info = await g2.streamInfo(req.params.id);
-    const online = Array.isArray(info?.producers) && info.producers.some((p) => p.state === "connected" || p.url);
-    res.json({ online: !!online, recording: rec.isRecording(req.params.id) });
+    res.json({ online: producerOnline(info), recording: rec.isRecording(req.params.id) });
   } catch (e) {
     res.json({ online: false, recording: rec.isRecording(req.params.id), error: e.message });
   }
